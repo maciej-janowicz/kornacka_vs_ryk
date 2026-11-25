@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#2d4a1e">
+<title>Pcim Tylny: Wojna o Stragan</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #1d2b14; color: #fff;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden; touch-action: manipulation; -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent; }
+  #app { display: flex; flex-direction: column; height: 100%; height: 100dvh; max-width: 640px; margin: 0 auto;
+    padding-bottom: env(safe-area-inset-bottom); box-sizing: border-box; }
+  #hud { display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: #2d4a1e;
+    font-weight: 700; font-size: 15px; }
+  #hud .grow { flex: 1; }
+  #hpbar { height: 12px; background: #5b1f1f; border-radius: 6px; overflow: hidden; border: 1px solid #0006; }
+  #hpfill { height: 100%; width: 100%; background: linear-gradient(#7be35a, #3ea02a); transition: width .15s; }
+  #hplabel { font-size: 10px; font-weight: 600; opacity: .85; margin-bottom: 2px; }
+  #ticker { background: #1d2b14; color: #ffe9a8; font-size: 13px; padding: 4px 10px; min-height: 34px;
+    display: flex; align-items: center; line-height: 1.2; }
+  #stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: #1d2b14; }
+  canvas { display: block; border-radius: 10px; touch-action: none; }
+  #bar { display: flex; gap: 8px; padding: 8px 10px; background: #2d4a1e; }
+  button { font: inherit; font-weight: 700; border: 0; border-radius: 12px; padding: 12px 10px; color: #fff;
+    background: #4b7a2e; flex: 1; font-size: 15px; }
+  button:active { transform: scale(.97); filter: brightness(1.15); }
+  button:disabled { opacity: .45; }
+  #umbrella { background: #7a2e6a; flex: 2; }
+  #overlay { position: fixed; inset: 0; background: #000a; display: none; align-items: center; justify-content: center; padding: 16px; z-index: 5; }
+  #card { background: #fff8e1; color: #2b2b2b; border-radius: 18px; padding: 18px; max-width: 420px; width: 100%;
+    box-shadow: 0 10px 40px #000a; max-height: 92vh; overflow: auto; }
+  #portrait { font-size: 54px; text-align: center; line-height: 1; }
+  #ctitle { font-size: 20px; font-weight: 800; text-align: center; margin: 8px 0; }
+  #ctext { font-size: 15px; line-height: 1.4; }
+  #ctext p { margin: 0 0 8px; }
+  #cbtn { margin-top: 10px; width: 100%; background: #c0392b; font-size: 17px; }
+  .small { font-size: 12px; opacity: .7; text-align: center; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="money">🥒 0</div>
+    <div id="wave">Fala 0/6</div>
+    <div class="grow"><div id="hplabel">Kondycja straganu</div><div id="hpbar"><div id="hpfill"></div></div></div>
+  </div>
+  <div id="ticker"></div>
+  <div id="stage"><canvas id="c"></canvas></div>
+  <div id="bar">
+    <button id="speed">⏩ x1</button>
+    <button id="pause">⏸ Pauza</button>
+    <button id="umbrella">🌂 Parasol Kornackiej</button>
+  </div>
+</div>
+
+<div id="overlay"><div id="card">
+  <div id="portrait">👵</div>
+  <div id="ctitle"></div>
+  <div id="ctext"></div>
+  <button id="cbtn">Dalej!</button>
+  <div class="small" id="cfoot"></div>
+</div></div>
+
+<script>
+(function () {
+'use strict';
+
+/* ================== STAŁE ================== */
+const W = 360, H = 540, CX = 180, CY = 282;
+const TOTAL_WAVES = 6;
+const SLOT_R = 88;
+const SLOT_POS = [];
+for (let i = 0; i < 8; i++) {
+  const a = i * Math.PI / 4 - Math.PI / 2;
+  SLOT_POS.push({ x: CX + Math.cos(a) * SLOT_R, y: CY + Math.sin(a) * SLOT_R });
+}
+const COST_PLACE = 30;
+const COST_UP = [0, 45, 80];            // koszt awansu z poz. 1->2 i 2->3
+const WARAN = [
+  { dmg: 7,  rate: 1.3, range: 110, size: 24, title: 'Waran' },
+  { dmg: 13, rate: 1.6, range: 120, size: 29, title: 'Waran Weteran' },
+  { dmg: 22, rate: 1.9, range: 135, size: 34, title: 'Waran Alfa' }
+];
+const ENEMY = {
+  duck:    { emoji: '🦆', name: 'Kaczka-Inkasent',   hp: 26,  speed: 60, dmg: 4,  reward: 4,  size: 24 },
+  tourist: { emoji: '🧳', name: 'Turysta z walizką', hp: 55,  speed: 44, dmg: 6,  reward: 6,  size: 26 },
+  bailiff: { emoji: '🧐', name: 'Komornik',          hp: 100, speed: 34, dmg: 10, reward: 10, size: 28 },
+  sanep:   { emoji: '😷', name: 'Inspektor Sanepidu',hp: 150, speed: 30, dmg: 13, reward: 14, size: 28 },
+  boss:    { emoji: '🐊', name: 'Krokodyl Zbigniew', hp: 1500,speed: 20, dmg: 22, reward: 150, size: 66 }
+};
+const NAMES = ['Zenobiusz','Bożenka','Rafał','Gryzelda','Mieczysław','Waranina','Bonifacy','Cezary','Halinka','Lolek','Genowefa','Ptyś'];
+const COMIC = ['CHRUP!','GRYZ!','PCIM!','AŁA!','Z TYŁU!','NO!','HAP!','BUM!'];
+const CRIES = ['Ogórki! Świeże, z tyłu!','Kisić czy nie kisić?','Ogórek tańszy niż honor!','Z przodu drożej!','Kup ogórka, zyskaj spokój!','Pcim Tylny poleca!'];
+const IDLE_JOKES = [
+  'Waran Zenobiusz ogłosił strajk. Nikt nie zauważył.',
+  'Z którejkolwiek strony patrzysz, to i tak jest tył.',
+  'Stara Kornacka: „Słonie? Nie, dziękuję. Mamy swoje problemy.”',
+  'Krokodyl Zbigniew podobno boi się ogórków. Podobno.',
+  'Królewskie Towarzystwo Zoologii Zwierząt Niesłoniowych składa życzenia powodzenia.',
+  'Wilhelmina Ryk: „Mój krokodyl ma lepsze maniery niż twoje warany!”',
+  'Ktoś zapytał, gdzie jest Pcim Przedni. Zapadła cisza.',
+  'Waran Bożenka ugryzła nie to, co trzeba. Ale skutecznie.',
+  'W Pcimiu Tylnym nawet GPS pokazuje „raczej z tyłu”.',
+  'Ogórki kiszone są dziś w dobrej kondycji psychicznej.'
+];
+const WAVE_INFO = [
+  null,
+  { t: 'Fala 1: Kaczki Windykacyjne', p: 'Wilhelmina wysłała kaczki z nakazami zapłaty. Kaczki nie rozumieją słowa „nie”. Kaczki w ogóle niewiele rozumieją.' },
+  { t: 'Fala 2: Turyści z walizkami', p: 'Turyści szukają Pcimia. Znaleźli Pcim Tylny. Jeszcze nie wiedzą, że to z tyłu, ale zaraz się zorientują.' },
+  { t: 'Fala 3: Komornicy', p: 'Komornik nie dzwoni. Komornik nie pisze. Komornik jest już na straganie i ogląda ogórki z wyrazem twarzy „zajęte”.' },
+  { t: 'Fala 4: Sanepid', p: 'Inspekcja twierdzi, że ogórki są „za zielone”. Wilhelmina twierdzi, że to dowód. W co?' },
+  { t: 'Fala 5: Wszystkiego po trochu', p: 'Budżet na wyspecjalizowanych wysłanników się skończył. Wilhelmina wysyła, co popadnie. Popadło sporo.' },
+  { t: 'Fala 6: Wilhelmina Ryk i krokodyl Zbigniew', p: 'Sama złoczyńca, osobiście, na krokodylu. Zbigniew ma w oczach głód, a w głowie ani jednej myśli. Trzymaj się straganu!' }
+];
+const AFTER_WAVE = [
+  null,
+  'Ostatnia kaczka uciekła, pozostawiając nakaz zapłaty, który waran Zenobiusz natychmiast zjadł.',
+  'Turyści odjechali. Jeden został i kupił ogórka. Stwierdził, że „to jest autentyczne”. Było.',
+  'Komornik zajął… własną teczkę. Wyszedł w milczeniu.',
+  'Sanepid wystawił mandat sam sobie za „nadmierną gorliwość”. Prezeska Kornacka przyjęła to z godnością.',
+  'Z oddali słychać ryk. To albo Wilhelmina, albo czyjś rozrusznik. Raczej Wilhelmina.'
+];
+
+/* ================== STAN ================== */
+let G = null;
+let nextId = 1;
+const rnd = (a, b) => a + Math.random() * (b - a);
+const pick = a => a[Math.floor(Math.random() * a.length)];
+const dist = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
+
+function newGame() {
+  G = {
+    state: 'intro', money: 60, hp: 100, maxHp: 100, wave: 0, time: 0,
+    enemies: [], fx: [], slots: SLOT_POS.map(() => null),
+    queue: [], waveTime: 0, speed: 1, paused: false, kills: 0, score: 0,
+    umbCd: 0, passive: 0, jokeT: 8, bossTaunt: 0, bossAlive: false, bossDuckT: 0, stallShake: 0
+  };
+}
+
+/* ================== FALE ================== */
+function buildWave(n) {
+  const pools = {
+    1: ['duck'], 2: ['duck', 'tourist'], 3: ['tourist', 'bailiff', 'duck'],
+    4: ['bailiff', 'sanep', 'duck'], 5: ['duck', 'tourist', 'bailiff', 'sanep'], 6: ['duck', 'tourist', 'bailiff', 'sanep']
+  };
+  const q = [];
+  const cnt = 8 + n * 6;
+  let t = 1.0;
+  for (let i = 0; i < cnt; i++) {
+    t += rnd(0.55, 1.25) * (1.15 - n * 0.06);
+    q.push({ t, type: pick(pools[n]), side: Math.floor(Math.random() * 4) });
+  }
+  if (n === 6) q.push({ t: 4, type: 'boss', side: Math.floor(Math.random() * 4) });
+  q.sort((a, b) => a.t - b.t);
+  return q;
+}
+
+function startWave() {
+  G.wave++;
+  G.queue = buildWave(G.wave);
+  G.waveTime = 0;
+  G.state = 'play';
+  ticker(WAVE_INFO[G.wave].t + ': do boju!');
+}
+
+function spawn(type, side) {
+  const T = ENEMY[type];
+  let x, y;
+  if (side === 0) { x = rnd(30, W - 30); y = -20; }
+  else if (side === 1) { x = W + 20; y = rnd(50, H - 50); }
+  else if (side === 2) { x = rnd(30, W - 30); y = H + 20; }
+  else { x = -20; y = rnd(50, H - 50); }
+  const e = { id: nextId++, type, x, y, hp: T.hp, max: T.hp, atk: rnd(0, 1), flash: 0 };
+  G.enemies.push(e);
+  if (type === 'boss') {
+    G.bossAlive = true; G.bossDuckT = 4;
+    say('Wilhelmina Ryk: „Oddawaj stragan, Kornacka!”', '#ff9ad5');
+  }
+}
+
+/* ================== AKCJE GRACZA ================== */
+function tapStall() {
+  const gain = 3;
+  G.money += gain;
+  G.stallShake = 0.12;
+  float(CX + rnd(-30, 30), CY - 40, '+' + gain + '🥒', '#c8ff9a');
+  if (Math.random() < 0.25) float(CX, CY - 62, pick(CRIES), '#fff6b0', 1.6, 11);
+}
+
+function tapSlot(i) {
+  const s = G.slots[i];
+  const p = SLOT_POS[i];
+  if (!s) {
+    if (G.money < COST_PLACE) { float(p.x, p.y - 20, 'Brak ogórków!', '#ff8a8a'); return false; }
+    G.money -= COST_PLACE;
+    G.slots[i] = { lvl: 0, cd: rnd(0, 0.5), lunge: 0, lx: 0, ly: 0, name: pick(NAMES) };
+    float(p.x, p.y - 22, 'Waran ' + G.slots[i].name + ' melduje się!', '#d8ffb0', 1.8, 11);
+    return true;
+  }
+  if (s.lvl >= 2) { float(p.x, p.y - 22, 'Maks. poziom!', '#ffe9a8'); return false; }
+  const cost = COST_UP[s.lvl + 1];
+  if (G.money < cost) { float(p.x, p.y - 22, 'Trzeba ' + cost + '🥒', '#ff8a8a'); return false; }
+  G.money -= cost;
+  s.lvl++;
+  float(p.x, p.y - 24, s.lvl === 1 ? s.name + ' awansuje!' : s.name + ' ALFA!', '#ffd84d', 1.8, 12);
+  return true;
+}
+
+function useUmbrella() {
+  if (G.state !== 'play' || G.umbCd > 0) return false;
+  G.umbCd = 25;
+  let n = 0;
+  for (const e of G.enemies) { hit(e, e.type === 'boss' ? 60 : 30); n++; }
+  float(CX, CY - 90, '🌂 PARASOL!', '#ff9aff', 1.6, 22);
+  say('Stara Kornacka macha parasolem. Trafiono ' + n + ' wrogów. Parasol cały.', '#ffd0ff');
+  return true;
+}
+
+/* ================== WALKA ================== */
+function hit(e, dmg) {
+  if (e.hp <= 0) return;
+  e.hp -= dmg; e.flash = 0.1;
+  if (e.hp <= 0) {
+    const T = ENEMY[e.type];
+    G.money += T.reward; G.kills++; G.score += T.reward * 10;
+    float(e.x, e.y - 14, '+' + T.reward + '🥒', '#c8ff9a');
+    float(e.x + rnd(-10, 10), e.y - 4, pick(COMIC), '#ffd84d', 0.9, 14);
+    if (e.type === 'boss') { G.bossAlive = false; }
+  }
+}
+
+function update(dt) {
+  if (G.state !== 'play') return;
+  G.time += dt; G.waveTime += dt;
+  G.stallShake = Math.max(0, G.stallShake - dt);
+  G.umbCd = Math.max(0, G.umbCd - dt);
+
+  // pasywny dochód straganu
+  G.passive += dt * 1.6;
+  if (G.passive >= 1) { const k = Math.floor(G.passive); G.money += k; G.passive -= k; }
+
+  // spawn
+  while (G.queue.length && G.queue[0].t <= G.waveTime) {
+    const q = G.queue.shift(); spawn(q.type, q.side);
+  }
+  // boss produkuje kaczki
+  if (G.bossAlive) {
+    G.bossDuckT -= dt;
+    if (G.bossDuckT <= 0) {
+      G.bossDuckT = 5.5;
+      const b = G.enemies.find(e => e.type === 'boss' && e.hp > 0);
+      if (b) { G.enemies.push({ id: nextId++, type: 'duck', x: b.x, y: b.y, hp: 26, max: 26, atk: 0, flash: 0 }); }
+    }
+    G.bossTaunt -= dt;
+    if (G.bossTaunt <= 0) {
+      G.bossTaunt = 11;
+      say(pick(['Wilhelmina: „Zbigniew, ugryź coś!”', 'Wilhelmina: „Ogórki będą moje, a ty będziesz z tyłu!”', 'Krokodyl Zbigniew ryczy. Brzmi jak zepsuta pralka.']), '#ff9ad5');
+    }
+  }
+
+  // wrogowie
+  for (const e of G.enemies) {
+    if (e.hp <= 0) continue;
+    const T = ENEMY[e.type];
+    e.flash = Math.max(0, e.flash - dt);
+    const d = dist(e.x, e.y, CX, CY);
+    const stop = e.type === 'boss' ? 52 : 36;
+    if (d > stop) {
+      e.x += (CX - e.x) / d * T.speed * dt;
+      e.y += (CY - e.y) / d * T.speed * dt;
+    } else {
+      e.atk += dt;
+      if (e.atk >= 1.1) {
+        e.atk = 0;
+        G.hp -= T.dmg; G.stallShake = 0.2;
+        float(CX + rnd(-24, 24), CY - 30, '-' + T.dmg, '#ff6b6b', 0.8, 16);
+      }
+    }
+  }
+  G.enemies = G.enemies.filter(e => e.hp > 0);
+
+  // warany
+  for (let i = 0; i < G.slots.length; i++) {
+    const s = G.slots[i]; if (!s) continue;
+    const L = WARAN[s.lvl], p = SLOT_POS[i];
+    s.cd -= dt; s.lunge = Math.max(0, s.lunge - dt);
+    if (s.cd > 0) continue;
+    let best = null, bd = 1e9;
+    for (const e of G.enemies) {
+      const d = dist(p.x, p.y, e.x, e.y);
+      if (d <= L.range && d < bd) { bd = d; best = e; }
+    }
+    if (!best) continue;
+    s.cd = 1 / L.rate;
+    const dx = best.x - p.x, dy = best.y - p.y, dl = Math.hypot(dx, dy) || 1;
+    s.lunge = 0.15; s.lx = dx / dl * 10; s.ly = dy / dl * 10;
+    G.fx.push({ k: 'bite', x1: p.x, y1: p.y, x2: best.x, y2: best.y, life: 0.12, max: 0.12 });
+    hit(best, L.dmg);
+    if (s.lvl === 2) {                      // Alfa: machnięcie ogonem
+      for (const e of G.enemies) if (e !== best && dist(e.x, e.y, best.x, best.y) < 34) hit(e, L.dmg * 0.5);
+    }
+  }
+  G.enemies = G.enemies.filter(e => e.hp > 0);
+
+  // fx
+  for (const f of G.fx) f.life -= dt;
+  G.fx = G.fx.filter(f => f.life > 0);
+
+  // żarty
+  G.jokeT -= dt;
+  if (G.jokeT <= 0) { G.jokeT = rnd(9, 15); say(pick(IDLE_JOKES)); }
+
+  // koniec?
+  if (G.hp <= 0) { G.hp = 0; endGame(false); return; }
+  if (!G.queue.length && !G.enemies.length) {
+    if (G.wave >= TOTAL_WAVES) endGame(true); else waveCleared();
+  }
+}
+
+/* ================== UI ================== */
+const $ = id => document.getElementById(id);
+let canvas, ctx, scale = 1, dpr = 1;
+
+function say(text) { ticker(text); }
+function ticker(text) { const t = $('ticker'); if (t) t.textContent = text; }
+function float(x, y, text, color, life, size) {
+  life = life || 1.0;
+  G.fx.push({ k: 'text', x, y, text, color: color || '#fff', size: size || 15, life, max: life });
+}
+
+function showCard(portrait, title, html, btn, foot, cb) {
+  $('portrait').textContent = portrait;
+  $('ctitle').textContent = title;
+  $('ctext').innerHTML = html;
+  $('cbtn').textContent = btn;
+  $('cfoot').textContent = foot || '';
+  $('overlay').style.display = 'flex';
+  $('cbtn').onclick = () => { $('overlay').style.display = 'none'; cb(); };
+}
+
+function bestScore() { try { return +localStorage.getItem('pcim_best') || 0; } catch (e) { return 0; } }
+function saveBest(v) { try { if (v > bestScore()) localStorage.setItem('pcim_best', String(v)); } catch (e) {} }
+
+function showIntro() {
+  G.state = 'intro';
+  showCard('👵', 'Pcim Tylny, godz. 5:45',
+    '<p><b>Pcim Tylny</b> to dzielnica Pcimia, która nazywa się tak dlatego, że z którejkolwiek strony się patrzy, i tak jest z tyłu.</p>' +
+    '<p>Złowroga <b>Wilhelmina Ryk</b> i jej krokodyl <b>Zbigniew</b> chcą przejąć stragan z ogórkami. Ty jesteś <b>Starą Kornacką</b>, prezeską Królewskiego Towarzystwa Zoologii Zwierząt Niesłoniowych. Masz warany. Wilhelmina ma krokodyla i zero wstydu.</p>' +
+    '<p>🥒 <b>Stuknij stragan</b>: sprzedajesz ogórki.<br>🦎 <b>Stuknij puste kółko</b>: stawiasz warana (30🥒).<br>⭐ <b>Stuknij warana</b>: awans.<br>🌂 <b>Parasol</b>: bije wszystkich (co 25 s).</p>',
+    'Do boju!', 'Rekord: ' + bestScore() + ' pkt', beginWaveCard);
+}
+
+function beginWaveCard() {
+  const n = G.wave + 1;
+  const wi = WAVE_INFO[n];
+  showCard(n === 6 ? '😈' : '👵', wi.t, '<p>' + wi.p + '</p>', n === 6 ? 'Na krokodyla!' : 'Start fali ' + n, '', startWave);
+}
+
+function waveCleared() {
+  G.state = 'wavecard';
+  G.money += 25 + G.wave * 5; G.score += 100 * G.wave;
+  G.hp = Math.min(G.maxHp, G.hp + 15);
+  showCard('👵', 'Fala ' + G.wave + ' odparta!',
+    '<p>' + AFTER_WAVE[G.wave] + '</p><p>Premia za sprzedaż ogórków: <b>+' + (25 + G.wave * 5) + '🥒</b>, stragan odzyskał trochę sił.</p>',
+    'Dalej!', '', beginWaveCard);
+}
+
+function endGame(win) {
+  G.state = win ? 'win' : 'lose';
+  if (win) G.score += 1000 + Math.round(G.hp) * 10;
+  saveBest(G.score);
+  if (win) {
+    showCard('🐊', 'ZWYCIĘSTWO!',
+      '<p>Wilhelmina ucieka, wrzeszcząc coś o „niesprawiedliwym podziale tyłów”. Krokodyl Zbigniew zostaje, bo zjadł wszystkie ogórki i zasnął pod straganem.</p>' +
+      '<p>Zbigniew zostaje przyjęty do Królewskiego Towarzystwa jako <b>zwierzę niesłoniowe honorowe</b>.</p>' +
+      '<p>Wynik: <b>' + G.score + ' pkt</b> (rekord: ' + bestScore() + '). Pokonanych: ' + G.kills + '.</p>',
+      'Zagraj jeszcze raz', 'Pcim Tylny dziękuje. Z tyłu.', restart);
+  } else {
+    showCard('😈', 'Stragan upadł…',
+      '<p>Wilhelmina wprowadza w Pcimiu Tylnym opłatę za oddychanie z tyłu. Warany idą na emeryturę, a Stara Kornacka pisze list do Pcimia Przedniego (bez odpowiedzi).</p>' +
+      '<p>Dotarłeś do fali <b>' + Math.max(1, G.wave) + '</b>. Wynik: <b>' + G.score + ' pkt</b> (rekord: ' + bestScore() + ').</p>',
+      'Spróbuj jeszcze raz', 'Zbigniew jest dziś wyjątkowo głodny.', restart);
+  }
+}
+
+function restart() { newGame(); beginWaveCard(); }
+
+/* ================== RYSOWANIE ================== */
+const EMOJI_FONT = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
+function emoji(ch, x, y, size, alpha) {
+  ctx.save();
+  if (alpha !== undefined) ctx.globalAlpha = alpha;
+  ctx.font = size + 'px ' + EMOJI_FONT;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(ch, x, y);
+  ctx.restore();
+}
+
+function label(text, x, y, size, color, rot) {
+  ctx.save();
+  ctx.translate(x, y); if (rot) ctx.rotate(rot);
+  ctx.font = '800 ' + size + 'px system-ui, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.lineWidth = 3; ctx.strokeStyle = '#0008'; ctx.strokeText(text, 0, 0);
+  ctx.fillStyle = color; ctx.fillText(text, 0, 0);
+  ctx.restore();
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  // trawa
+  ctx.fillStyle = '#4f8f35'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#5aa13c';
+  for (let i = 0; i < 40; i++) { const gx = (i * 97) % W, gy = (i * 61) % H; ctx.fillRect(gx, gy, 14, 4); }
+  // klepisko
+  ctx.fillStyle = '#b79b6a'; ctx.beginPath(); ctx.arc(CX, CY, 125, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#c8ad7c'; ctx.beginPath(); ctx.arc(CX, CY, 70, 0, Math.PI * 2); ctx.fill();
+  // „TYŁ” z każdej strony
+  label('TYŁ', CX, 14, 16, '#ffe9a8', 0);
+  label('TYŁ', CX, H - 14, 16, '#ffe9a8', Math.PI);
+  label('TYŁ', 14, CY, 16, '#ffe9a8', -Math.PI / 2);
+  label('TYŁ', W - 14, CY, 16, '#ffe9a8', Math.PI / 2);
+
+  // miejsca na warany
+  for (let i = 0; i < SLOT_POS.length; i++) {
+    const p = SLOT_POS[i], s = G.slots[i];
+    ctx.beginPath(); ctx.arc(p.x, p.y, 21, 0, Math.PI * 2);
+    ctx.fillStyle = s ? '#00000022' : '#ffffff33'; ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = s ? '#00000033' : '#ffffffaa'; ctx.setLineDash(s ? [] : [4, 4]); ctx.stroke(); ctx.setLineDash([]);
+    if (!s) label('+30', p.x, p.y, 12, G.money >= COST_PLACE ? '#d8ffb0' : '#ffb0b0', 0);
+  }
+  // stragan
+  const sh = G.stallShake > 0 ? Math.sin(G.time * 80) * 2 : 0;
+  emoji('🏪', CX + sh, CY, 52);
+  emoji('🥒', CX - 24, CY + 24, 18); emoji('🥒', CX + 24, CY + 24, 18);
+  label('OGÓRKI', CX, CY + 44, 11, '#fff', 0);
+
+  // warany
+  for (let i = 0; i < SLOT_POS.length; i++) {
+    const s = G.slots[i]; if (!s) continue;
+    const p = SLOT_POS[i], L = WARAN[s.lvl];
+    const k = s.lunge > 0 ? s.lunge / 0.15 : 0;
+    emoji('🦎', p.x + s.lx * k, p.y + s.ly * k, L.size);
+    if (s.lvl > 0) label('★'.repeat(s.lvl), p.x, p.y + 20, 11, '#ffd84d', 0);
+    else if (G.state === 'play') label('+' + COST_UP[1], p.x, p.y + 20, 9, G.money >= COST_UP[1] ? '#d8ffb0' : '#ffb0b0', 0);
+  }
+  // wrogowie
+  for (const e of G.enemies) {
+    const T = ENEMY[e.type];
+    const bob = Math.sin(G.time * 8 + e.id) * 2;
+    ctx.save();
+    if (e.flash > 0) ctx.globalAlpha = 0.55;
+    emoji(T.emoji, e.x, e.y + bob, T.size);
+    if (e.type === 'boss') { emoji('😈', e.x, e.y - 30 + bob, 28); label('Wilhelmina Ryk i Zbigniew', e.x, e.y + 42, 10, '#ffb3e6', 0); }
+    ctx.restore();
+    if (e.hp < e.max) {
+      const bw = T.size, bx = e.x - bw / 2, by = e.y - T.size / 2 - (e.type === 'boss' ? 36 : 8);
+      ctx.fillStyle = '#400'; ctx.fillRect(bx, by, bw, 4);
+      ctx.fillStyle = '#e44'; ctx.fillRect(bx, by, bw * Math.max(0, e.hp / e.max), 4);
+    }
+  }
+  // efekty
+  for (const f of G.fx) {
+    if (f.k === 'bite') {
+      ctx.globalAlpha = f.life / f.max; ctx.strokeStyle = '#fff'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(f.x1, f.y1); ctx.lineTo(f.x2, f.y2); ctx.stroke(); ctx.globalAlpha = 1;
+    } else {
+      const t = 1 - f.life / f.max;
+      ctx.globalAlpha = Math.min(1, f.life / (f.max * 0.4));
+      label(f.text, f.x, f.y - t * 26, f.size, f.color, 0);
+      ctx.globalAlpha = 1;
+    }
+  }
+  // sufit: ikona parasola na cooldownie
+  if (G.umbCd > 0) label('🌂 ' + Math.ceil(G.umbCd) + ' s', W - 44, H - 16, 12, '#ffd0ff', 0);
+}
+
+function updateHud() {
+  $('money').textContent = '🥒 ' + Math.floor(G.money);
+  $('wave').textContent = 'Fala ' + Math.max(1, G.wave) + '/' + TOTAL_WAVES;
+  $('hpfill').style.width = Math.max(0, G.hp / G.maxHp * 100) + '%';
+  const u = $('umbrella');
+  u.disabled = G.state !== 'play' || G.umbCd > 0;
+  u.textContent = G.umbCd > 0 ? '🌂 za ' + Math.ceil(G.umbCd) + ' s' : '🌂 Parasol Kornackiej';
+}
+
+/* ================== PĘTLA I WEJŚCIE ================== */
+let last = 0;
+function frame(ts) {
+  const dt = Math.min(0.05, (ts - last) / 1000 || 0); last = ts;
+  if (!G.paused) { for (let i = 0; i < G.speed; i++) update(dt); }
+  draw(); updateHud();
+  requestAnimationFrame(frame);
+}
+
+function resize() {
+  const stage = $('stage');
+  const cw = stage.clientWidth, ch = stage.clientHeight;
+  scale = Math.max(0.3, Math.min(cw / W, ch / H));
+  dpr = window.devicePixelRatio || 1;
+  canvas.style.width = Math.floor(W * scale) + 'px';
+  canvas.style.height = Math.floor(H * scale) + 'px';
+  canvas.width = Math.floor(W * scale * dpr);
+  canvas.height = Math.floor(H * scale * dpr);
+  ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+}
+
+function onTap(ev) {
+  ev.preventDefault();
+  if (G.state !== 'play' || G.paused) return;
+  const r = canvas.getBoundingClientRect();
+  const x = (ev.clientX - r.left) / scale, y = (ev.clientY - r.top) / scale;
+  for (let i = 0; i < SLOT_POS.length; i++) {
+    if (dist(x, y, SLOT_POS[i].x, SLOT_POS[i].y) < 26) { tapSlot(i); return; }
+  }
+  if (dist(x, y, CX, CY) < 48) tapStall();
+}
+
+function init() {
+  canvas = $('c'); ctx = canvas.getContext('2d');
+  newGame(); resize();
+  window.addEventListener('resize', resize);
+  window.addEventListener('orientationchange', () => setTimeout(resize, 150));
+  canvas.addEventListener('pointerdown', onTap);
+  $('speed').onclick = () => { G.speed = G.speed === 1 ? 2 : 1; $('speed').textContent = '⏩ x' + G.speed; };
+  $('pause').onclick = () => { G.paused = !G.paused; $('pause').textContent = G.paused ? '▶ Wznów' : '⏸ Pauza'; };
+  $('umbrella').onclick = useUmbrella;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && G.state === 'play') { G.paused = true; $('pause').textContent = '▶ Wznów'; }
+  });
+  ticker('Pcim Tylny, godz. 5:45. Cisza przed burzą z tyłu.');
+  showIntro();
+  requestAnimationFrame(frame);
+}
+
+window.__game = { get G() { return G; }, tapSlot, tapStall, useUmbrella, update, restart, startWave, beginWaveCard, newGame };
+init();
+})();
+</script>
+</body>
+</html>
